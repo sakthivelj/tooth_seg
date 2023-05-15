@@ -1,4 +1,5 @@
 import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 import torch
 import torchio as tio
 from torch.utils.data import DataLoader
@@ -42,12 +43,12 @@ patches_queue = tio.Queue(
     sampler,
 )
 
-train_loader = DataLoader(patches_queue, batch_size=4, shuffle=True)
+train_loader = DataLoader(patches_queue, batch_size=4)
 
 # Model, optimizer and loss
 model = UNet(n_channels=1, n_classes=2)  # Define according to your UNet module
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda')
 model.to(device)
 
 # Dice loss function
@@ -61,10 +62,12 @@ def dice_loss(pred, target, smooth=1.):
 from tqdm import tqdm  # Import tqdm
 
 # Training loop
-for epoch in tqdm(range(10)):  # Use tqdm on the range of epochs
+for epoch in tqdm(range(100)):  # Use tqdm on the range of epochs
     print(f"\nEpoch {epoch+1}")
+    epoch_loss = 0.0  # Initialize the epoch loss
+
     for i, batch in enumerate(train_loader):
-        img = batch['img'][tio.DATA].float().to(device) # Added .float() to convert ShortTensor to FloatTensor
+        img = batch['img'][tio.DATA].float().to(device)  # Added .float() to convert ShortTensor to FloatTensor
         lbl = batch['lbl'][tio.DATA].to(device)
         optimizer.zero_grad()
         output = model(img)
@@ -72,7 +75,13 @@ for epoch in tqdm(range(10)):  # Use tqdm on the range of epochs
         loss.backward()
         optimizer.step()
 
+        epoch_loss += loss.item()  # Accumulate the batch loss
+
         print(f"Batch {i+1}, Loss: {loss.item()}")
+
+    # Print the average loss for the epoch
+    avg_epoch_loss = epoch_loss / len(train_loader)
+    print(f"Avg Loss for Epoch {epoch+1}: {avg_epoch_loss}")
 
 # Save the model after training
 torch.save(model.state_dict(), 'model.pth')
