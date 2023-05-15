@@ -1,7 +1,8 @@
 from pathlib import Path
 
-import torchio as tio
 import torch
+import torch.nn as nn
+import torchio as tio
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -12,7 +13,26 @@ import os
 from torchio.transforms import Resample, ToCanonical
 
 
-from model import UNet
+# Simple VNet-like architecture
+class VNet(nn.Module):
+    def __init__(self):
+        super(VNet, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv3d(1, 16, kernel_size=5, padding=2),
+            nn.BatchNorm3d(16),
+            nn.ReLU(inplace=True),
+            nn.MaxPool3d(kernel_size=2, stride=2),
+        )
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose3d(16, 1, kernel_size=2, stride=2),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
+
 
 def list_maker(dir, folder, ext):
     dir_path = os.path.join(dir, folder)
@@ -84,8 +104,8 @@ class Segmenter(pl.LightningModule):
     def __init__(self):
         super().__init__()
         
-        self.model = UNet()
-        
+        self.model = VNet()
+
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
         self.loss_fn = torch.nn.CrossEntropyLoss()
     
@@ -94,31 +114,27 @@ class Segmenter(pl.LightningModule):
         return pred
     
     def training_step(self, batch, batch_idx):
-        # You can obtain the raw volume arrays by accessing the data attribute of the subject
         img = batch["CT"]["data"]
-        mask = batch["Label"]["data"][:,0]  # Remove single channel as CrossEntropyLoss expects NxHxW
+        mask = batch["Label"]["data"][:,0] 
         mask = mask.long()
+        
         
         pred = self(img)
         loss = self.loss_fn(pred, mask)
         
-        # Logs
         self.log("Train Loss", loss)
         if batch_idx % 50 == 0:
             self.log_images(img.cpu(), pred.cpu(), mask.cpu(), "Train")
         return loss
     
-        
     def validation_step(self, batch, batch_idx):
-        # You can obtain the raw volume arrays by accessing the data attribute of the subject
         img = batch["CT"]["data"]
-        mask = batch["Label"]["data"][:,0]  # Remove single channel as CrossEntropyLoss expects NxHxW
+        mask = batch["Label"]["data"][:,0]
         mask = mask.long()
         
         pred = self(img)
         loss = self.loss_fn(pred, mask)
         
-        # Logs
         self.log("Val Loss", loss)
         self.log_images(img.cpu(), pred.cpu(), mask.cpu(), "Val")
         
@@ -147,7 +163,6 @@ class Segmenter(pl.LightningModule):
             
     
     def configure_optimizers(self):
-        #Caution! You always need to return a list here (just pack your optimizer into one :))
         return [self.optimizer]
 
 
@@ -166,3 +181,4 @@ trainer = pl.Trainer(accelerator=gpus,logger=TensorBoardLogger(save_dir="./logs"
                      max_epochs=100)
 
 trainer.fit(model, train_loader, val_loader)
+
